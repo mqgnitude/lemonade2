@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Econ-o-mancer</title>
+    <link rel="stylesheet" href="css/retro.css">
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
+</head>
+<body>
+    <div class="crt-container">
+        <div class="screen-overlay"></div>
+        <div id="output" class="terminal-output">
+            Initializing System...
+        </div>
+        <div class="input-line">
+            <span class="prompt">></span>
+            <input type="text" id="command-input" autocomplete="off" autofocus>
+        </div>
+    </div>
+
+    <script>
+        let pyodide;
+        const outputDiv = document.getElementById('output');
+        const inputField = document.getElementById('command-input');
+
+        window.addToTerminal = (text) => {
+            outputDiv.innerText += text + "\n";
+            outputDiv.scrollTop = outputDiv.scrollHeight;
+        };
+
+        window.clearTerminal = () => { outputDiv.innerText = ""; }
+
+        async function main() {
+            try {
+                window.addToTerminal("Loading Pyodide engine...");
+                pyodide = await loadPyodide();
+                
+                const files = [
+                    'py/__init__.py', 'py/data_models.py', 'py/events.py', 
+                    'py/game_engine.py', 'py/save_manager.py', 'py/tutorial.py', 
+                    'py/ui_web.py', 'py/main_web.py',
+                    'assets/ascii_logo.txt', 'saves/sample_easy.json', 'saves/sample_hard.json'
+                ];
+
+                window.addToTerminal("Verifying file system...");
+
+                // 1. PRE-CREATE FOLDERS (Safe Mode)
+                // We check if it exists first to avoid the 'Errno 44' crash.
+                const directories = new Set();
+                files.forEach(file => {
+                    const parts = file.split('/');
+                    parts.pop(); 
+                    if (parts.length > 0) directories.add(parts.join('/'));
+                });
+
+                directories.forEach(dir => {
+                    if (!pyodide.FS.analyzePath(dir).exists) {
+                        pyodide.FS.mkdirTree(dir);
+                    }
+                });
+
+                window.addToTerminal("Downloading game assets...");
+
+                // 2. DOWNLOAD AND WRITE
+                for (let file of files) {
+                    let response = await fetch(file);
+                    
+                    if (!response.ok) { 
+                        window.addToTerminal(`[ERROR 404] Missing file: ${file}`);
+                        console.warn(`404 on ${file}`);
+                        continue; 
+                    }
+                    let text = await response.text();
+                    
+                    try {
+                        pyodide.FS.writeFile(file, text);
+                    } catch (e) {
+                        // Ignore file exists errors, report others
+                        if(e.errno !== 44) console.error(e);
+                    }
+                }
+
+                window.addToTerminal("Booting Python kernel...");
+
+                pyodide.runPython(`
+                    import sys
+                    sys.path.append('/py')
+                    try:
+                        from py.main_web import WebGame
+                        game = WebGame()
+                        game.start()
+                    except ImportError as e:
+                        print(f"CRITICAL: Could not load game. {e}")
+                    except Exception as e:
+                        print(f"Error: {e}")
+                `);
+                
+                window.addToTerminal("System Ready. Type 'help' for commands.");
+                
+                inputField.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        let cmd = inputField.value;
+                        window.addToTerminal(`> ${cmd}`);
+                        inputField.value = '';
+                        pyodide.runPython(`game.process_input("${cmd}")`);
+                    }
+                });
+
+            } catch (err) {
+                console.error(err);
+                window.addToTerminal("\nFATAL ERROR: " + err.message);
+            }
+        }
+
+        main();
+    </script>
+</body>
+</html>
